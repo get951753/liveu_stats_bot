@@ -55,12 +55,20 @@ pub struct Rtmp {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Srt {
+    pub url: String,
+    pub publisher: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub liveu: Liveu,
     pub twitch: Twitch,
     pub commands: Commands,
     pub rtmp: Option<Rtmp>,
+    pub srt: Option<Srt>,
+    pub server: bool,
     pub custom_port_names: Option<CustomUnitNames>,
 }
 
@@ -124,6 +132,13 @@ impl Config {
             monitor,
         };
 
+        let server = input_to_bool(&input()
+            .msg("\nDo you want to start server to send messages about\nthe status of your battery or modems (Y/n): ")
+            .add_test(|x: &String| x.to_lowercase() == "y" || x.to_lowercase() == "n")
+            .err("Please enter y or n: ")
+            .default("y".to_string())
+            .get());   
+        
         let lauth = liveu::Liveu::authenticate(liveu.clone()).await?;
         let inventories = lauth.get_inventories().await?;
 
@@ -185,6 +200,22 @@ impl Config {
         };
 
         let q: String = input()
+            .msg("\nAre you using srt and would you like to display its bitrate as well (y/N): ")
+            .add_test(|x: &String| x.to_lowercase() == "y" || x.to_lowercase() == "n")
+            .err("Please enter y or n: ")
+            .default("n".to_string())
+            .get();
+
+        let mut srt = None;
+
+        if q == "y" {
+            srt = Some(Srt {
+                url: input().msg("Please enter the stats page URL: ").get(),
+                publisher: input().msg("Publisher: ").get(),
+            });
+        }
+
+        let q: String = input()
             .msg("\nAre you using nginx and would you like to display its bitrate as well (y/N): ")
             .add_test(|x: &String| x.to_lowercase() == "y" || x.to_lowercase() == "n")
             .err("Please enter y or n: ")
@@ -230,6 +261,8 @@ impl Config {
             twitch,
             commands,
             rtmp,
+            srt,
+            server,
             custom_port_names: custom_unit_names,
         };
         fs::write(CONFIG_FILE_NAME, serde_json::to_string_pretty(&config)?)?;

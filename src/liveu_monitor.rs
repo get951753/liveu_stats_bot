@@ -3,8 +3,17 @@ use twitch_irc::{
     transport::tcp::{TCPTransport, TLS},
     TwitchIRCClient,
 };
+use serde::Serialize;
 
 use crate::{config, liveu};
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Modem {
+    pub portname: String,
+    pub bitrate: u32,
+    pub connected: bool,
+    pub enabled: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct Monitor {
@@ -93,6 +102,28 @@ impl Monitor {
                 ignore = false;
             }
         }
+    }
+
+    pub async fn get_modems_data(&self) -> (Vec<Modem>, u32){
+        let mut modemsdata:Vec<Modem> = Vec::new();
+        let mut total_bitrate = 0;
+        
+        for interface in self
+            .liveu
+            .get_unit_custom_names(&self.boss_id, self.config.custom_port_names.clone())
+            .await
+            .unwrap()
+        {  
+            total_bitrate += &interface.uplink_kbps;
+            modemsdata.push(Modem{
+                portname: interface.port.to_string(), 
+                connected: interface.connected, 
+                bitrate: interface.uplink_kbps, 
+                enabled: interface.enabled
+            });
+        }
+        
+        (modemsdata.to_owned(), total_bitrate)
     }
 
     fn generate_modems_message(new_modems: Vec<String>, removed_modems: Vec<String>) -> String {
@@ -201,6 +232,22 @@ impl Monitor {
         }
     }
 
+    pub async fn get_battery_data(&self) -> liveu::Battery {
+        let battery = if let Ok(battery) = self.liveu.get_battery(&self.boss_id).await {
+            battery
+        }else{
+            liveu::Battery {
+                connected: false,
+                percentage: 255,
+                run_time_to_empty: 0,
+                discharging: false,
+                charging: false,
+            }
+        };
+        
+        battery   
+    }
+    
     pub async fn battery_percentage_message(
         &self,
         percentage: u8,

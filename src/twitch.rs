@@ -3,6 +3,7 @@ use crate::{
     error::Error,
     liveu::{self, Liveu},
     nginx,
+    srt,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -260,6 +261,11 @@ impl Twitch {
 
         message += &format!("Total LRT: {} Kbps", total_bitrate);
 
+        if let Some(srt) = &self.config.srt {
+            if let Ok(bitrate) = srt::get_srt_bitrate(srt).await {
+                message += &format!(", SRT: {} Kbps", bitrate);
+            };
+        }
         if let Some(rtmp) = &self.config.rtmp {
             if let Ok(Some(bitrate)) = nginx::get_rtmp_bitrate(rtmp).await {
                 message += &format!(", RTMP: {} Kbps", bitrate);

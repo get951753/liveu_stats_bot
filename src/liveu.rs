@@ -69,7 +69,7 @@ pub struct Inventories {
     pub units: Vec<Unit>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub struct Battery {
     pub connected: bool,

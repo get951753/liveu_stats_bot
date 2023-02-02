@@ -19,6 +19,9 @@ pub enum Error {
     #[error("Rtmp is offline: {0}")]
     RtmpDown(String),
 
+    #[error("Srt is offline: {0}")]
+    SrtDown(String),    
+
     #[error("No inventories found")]
     NoInventoriesFound,
 

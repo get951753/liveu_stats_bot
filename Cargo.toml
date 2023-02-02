@@ -17,3 +17,5 @@ thiserror = "1.0"
 tokio = { version = "1.5", features = ["macros", "rt", "rt-multi-thread"] }
 twitch-irc = "3.0"
 uuid = { version = "0.8", features = ["v4"] }
+actix-web = "4"
+actix-cors = "0.6.4"
