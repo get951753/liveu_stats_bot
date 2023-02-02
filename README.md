@@ -50,6 +50,11 @@ This config will be automatically generated upon running the binary and saved as
         "application": "publish",
         "key": "live"
     },
+    "srt": {
+        "url": "http://localhost:8181/stats",
+        "publisher": "publish/live/feed1"
+    },
+    "server": true,
     "customPortNames": {
         "ethernet": "ETH",
         "wifi": "WiFi",
@@ -70,7 +75,14 @@ You can remove these settings from the config if you don't want them or replace 
 | id              | When using mutliple units you can set a default unit by using the bossid            |
 | adminUsers      | A list of twitch usernames e.g. `["715209", "b3ck"]`                                |
 | rtmp            | If you are using nginx you can also show the bitrate when using the `stats` command |
+| srt             | If you are using srt you can also show the bitrate when using the `stats` command   |
 | customPortNames | Customize the port names                                                            |
+
+You can disable this setting (replace `true` with `false`) If you don't want it.
+
+| Name            | Description                                                                         |
+| --------------- | ----------------------------------------------------------------------------------- |
+| server          | A server can respond modems status, battery status, and srt bitrate on port 8183    |
 
 ## Chat Commands
 
@@ -102,11 +114,14 @@ If your LiveU is offline you'll see this in chat:
 If your LiveU is online and ready you'll see this in chat:
 > ChatBot: LiveU Online and Ready  
 
-If your LiveU is online, streaming but not using NGINX you'll see this in chat:
+If your LiveU is online, streaming but not using NGINX or SRT you'll see this in chat:
 > ChatBot: WiFi: 2453 Kbps, USB1: 2548 Kbps, USB2: 2328 Kbps, Ethernet: 2285 Kbps, Total LRT: 7000 Kbps
 
 If your LiveU is online, streaming and you're using NGINX you'll see this in chat:
 > ChatBot: WiFi: 2453 Kbps, USB1: 2548 Kbps, USB2: 2328 Kbps, Ethernet: 2285 Kbps, Total LRT: 7000 Kbps, RTMP: 6000 Kbps
+
+If your LiveU is online, streaming and you're using SRT you'll see this in chat:
+> ChatBot: WiFi: 2453 Kbps, USB1: 2548 Kbps, USB2: 2328 Kbps, Ethernet: 2285 Kbps, Total LRT: 7000 Kbps, SRT: 6000 Kbps
 
 `Please note: if one of your connections is offline it will NOT show up at all in the stats.`
 
