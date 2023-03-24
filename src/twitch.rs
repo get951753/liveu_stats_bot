@@ -1,9 +1,11 @@
+use tokio::sync::Mutex;
+
 use crate::{
     config,
     error::Error,
     liveu::{self, Liveu},
+    liveu_monitor::Modem,
     nginx,
-    srt,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -15,8 +17,7 @@ use twitch_irc::{
     transport::tcp::{TCPTransport, TLS},
     ClientConfig, TwitchIRCClient,
 };
-
-const OFFLINE_MSG: &str = "LiveU Offline :(";
+use rust_i18n::t;
 
 pub struct Twitch {
     client: TwitchIRCClient<TCPTransport<TLS>, StaticLoginCredentials>,
@@ -24,6 +25,10 @@ pub struct Twitch {
     liveu_boss_id: String,
     config: config::Config,
     timeout: Arc<AtomicBool>,
+    lang: String,
+    modem_sync: Arc<Mutex<Vec<Modem>>>,
+    battery_sync: Arc<Mutex<liveu::Battery>>,
+    srt_bitrate_sync: Arc<Mutex<i64>>,
 }
 
 impl Twitch {
@@ -31,6 +36,9 @@ impl Twitch {
         config: config::Config,
         liveu: Liveu,
         liveu_boss_id: String,
+        modem_sync: Arc<Mutex<Vec<Modem>>>,
+        battery_sync: Arc<Mutex<liveu::Battery>>,
+        srt_bitrate_sync: Arc<Mutex<i64>>,
     ) -> (
         TwitchIRCClient<TCPTransport<TLS>, StaticLoginCredentials>,
         tokio::task::JoinHandle<()>,
@@ -58,6 +66,7 @@ impl Twitch {
 
         client.join(channel);
 
+        let lang = config.lang.to_owned();
         let mod_only = mod_only.to_owned();
         let client_clone = client.clone();
         let join_handler = tokio::spawn(async move {
@@ -67,6 +76,10 @@ impl Twitch {
                 liveu_boss_id,
                 config,
                 timeout: Arc::new(AtomicBool::new(false)),
+                lang,
+                modem_sync,
+                battery_sync,
+                srt_bitrate_sync,
             };
 
             while let Some(message) = incoming_messages.recv().await {
@@ -223,13 +236,30 @@ impl Twitch {
     }
 
     async fn generate_liveu_modems_message(&self) -> Result<String, Error> {
-        let interfaces: Vec<liveu::Interface> = self
-            .liveu
-            .get_unit_custom_names(&self.liveu_boss_id, self.config.custom_port_names.clone())
-            .await?;
+        let mut interfaces: Vec<Modem>;
+        {
+            interfaces = (self.modem_sync.lock().await).clone();
+        }
+        if !self.config.liveu.monitor.modems{
+            for interface in self
+                .liveu
+                .get_unit_custom_names(&self.liveu_boss_id, self.config.custom_port_names.clone())
+                .await
+                .unwrap()
+            {  
+                interfaces.push(Modem{
+                    port: interface.port.to_string(), 
+                    connected: interface.connected, 
+                    uplink_kbps: interface.uplink_kbps, 
+                    enabled: interface.enabled,
+                    technology: interface.technology,
+                    is_currently_roaming: interface.is_currently_roaming,
+                });
+            }
+        }
 
         if interfaces.is_empty() {
-            return Ok(OFFLINE_MSG.to_string());
+            return Ok(t!("twitch.offline", locale = &self.lang));
         }
 
         let mut message = String::new();
@@ -247,24 +277,23 @@ impl Twitch {
                         "".to_string()
                     },
                     if interface.is_currently_roaming {
-                        " roaming"
+                        t!("twitch.roaming", locale = &self.lang)
                     } else {
-                        ""
+                        "".to_string()
                     }
                 );
             total_bitrate += interface.uplink_kbps;
         }
 
         if total_bitrate == 0 {
-            return Ok("LiveU Online and Ready".to_string());
+            return Ok(t!("twitch.online_ready", locale = &self.lang));
         }
 
         message += &format!("Total LRT: {} Kbps", total_bitrate);
 
         if let Some(srt) = &self.config.srt {
-            if let Ok(bitrate) = srt::get_srt_bitrate(srt).await {
-                message += &format!(", SRT: {} Kbps", bitrate);
-            };
+            let srt_bitrate = *self.srt_bitrate_sync.lock().await;
+            message += &format!(", SRT: {} Kbps", srt_bitrate);
         }
         if let Some(rtmp) = &self.config.rtmp {
             if let Ok(Some(bitrate)) = nginx::get_rtmp_bitrate(rtmp).await {
@@ -276,10 +305,18 @@ impl Twitch {
     }
 
     async fn generate_liveu_battery_message(&self) -> Result<String, Error> {
-        let battery = match self.liveu.get_battery(&self.liveu_boss_id).await {
-            Ok(b) => b,
-            Err(_) => return Ok(OFFLINE_MSG.to_string()),
+        let battery = if self.config.liveu.monitor.modems{
+            (self.battery_sync.lock().await).clone()
+        }else{
+            match self.liveu.get_battery(&self.liveu_boss_id).await {
+                Ok(b) => b,
+                Err(_) => return Ok(t!("twitch.offline", locale = &self.lang)),
+            }
         };
+        
+        if battery.percentage == 255{
+            return Ok(t!("twitch.offline", locale = &self.lang))
+        }
 
         let estimated_battery_time = {
             if battery.run_time_to_empty != 0 && battery.discharging {
@@ -288,11 +325,11 @@ impl Twitch {
                 let mut time_string = String::new();
 
                 if hours != 0 {
-                    time_string += &format!("{}h", hours);
+                    time_string += &t!("twitch.hours", locale = &self.lang, hour = &hours.to_string());
                 }
 
-                time_string += &format!(" {}m", minutes);
-                format!("Estimated battery time: {}", time_string)
+                time_string += &t!("twitch.minutes", locale = &self.lang, minute = &minutes.to_string());
+                t!("twitch.est_battery_time", locale = &self.lang, timeLeft = &time_string)
             } else {
                 "".to_string()
             }
@@ -300,25 +337,28 @@ impl Twitch {
 
         let charging = {
             if battery.charging {
-                "charging".to_string()
+                t!("twitch.charging", locale = &self.lang)
             } else if battery.percentage == 100 {
-                let mut s = "fully charged".to_string();
+                let mut s = t!("twitch.fully_charged", locale = &self.lang);
 
                 if battery.connected {
-                    s += ", connected"
+                    s += t!("twitch.connected", locale = &self.lang).as_str()
                 }
 
                 s
             } else if battery.percentage < 100 && !battery.charging && !battery.discharging {
-                "too hot to charge".to_string()
+                t!("twitch.too_hot", locale = &self.lang)
             } else {
-                "not charging".to_string()
+                t!("twitch.not_charging", locale = &self.lang)
             }
         };
 
-        let message = format!(
-            "LiveU Internal Battery: {}% {} {}",
-            battery.percentage, charging, estimated_battery_time
+        let message = t!(
+            "twitch.battery_message",
+            locale = &self.lang,
+            percent = &battery.percentage.to_string(),
+            chargingORnot = &charging,
+            est_time = &estimated_battery_time
         );
 
         Ok(message)
@@ -329,68 +369,70 @@ impl Twitch {
 
         let video = match video {
             Ok(video) => video,
-            Err(_) => return Ok(OFFLINE_MSG.to_string()),
+            Err(_) => return Ok(t!("twitch.offline", locale = &self.lang)),
         };
 
         if video.resolution.is_none() {
-            return Ok("LiveU no camera plugged in".to_string());
+            return Ok(t!("twitch.no_camera", locale = &self.lang));
         }
 
         if video.bitrate.is_some() {
-            return Ok("LiveU already streaming".to_string());
+            return Ok(t!("twitch.already_streaming", locale = &self.lang));
         }
 
         if self.liveu.start_stream(&self.liveu_boss_id).await.is_err() {
-            return Ok("LiveU request error".to_string());
+            return Ok(t!("twitch.request_error", locale = &self.lang));
         };
 
         let confirm = DataUsedInThread {
             chat: self.client.clone(),
             liveu: self.liveu.clone(),
             boss_id: self.liveu_boss_id.to_owned(),
+            lang: self.lang.to_owned(),
             channel,
         };
 
         tokio::spawn(async move {
             confirm
-                .confirm_action(15, true, "started".to_string(), "starting".to_string())
+                .confirm_action(15, true, t!("twitch.started", locale = &confirm.lang), t!("twitch.starting", locale = &confirm.lang))
                 .await
         });
 
-        Ok("LiveU starting stream".to_string())
+        Ok(t!("twitch.starting_stream", locale = &self.lang))
     }
 
     async fn generate_liveu_stop_message(&self, channel: String) -> Result<String, Error> {
         if !self.liveu.is_streaming(&self.liveu_boss_id).await {
-            return Ok("LiveU already stopped".to_string());
+            return Ok(t!("twitch.already_stopped", locale = &self.lang));
         }
 
         if self.liveu.stop_stream(&self.liveu_boss_id).await.is_err() {
-            return Ok("LiveU request error".to_string());
+            return Ok(t!("twitch.request_error", locale = &self.lang));
         };
 
         let confirm = DataUsedInThread {
             chat: self.client.clone(),
             liveu: self.liveu.clone(),
             boss_id: self.liveu_boss_id.to_owned(),
+            lang: self.lang.to_owned(),
             channel,
         };
 
         tokio::spawn(async move {
             confirm
-                .confirm_action(10, false, "stopped".to_string(), "stopping".to_string())
+                .confirm_action(10, false, t!("twitch.stopped", locale = &confirm.lang), t!("twitch.stopping", locale = &confirm.lang))
                 .await
         });
 
-        Ok("LiveU stopping stream".to_string())
+        Ok(t!("twitch.stopping_stream", locale = &self.lang))
     }
 
     async fn generate_liveu_restart_message(&self, channel: String) -> Result<String, Error> {
         if !self.liveu.is_streaming(&self.liveu_boss_id).await {
-            return Ok("LiveU not streaming".to_string());
+            return Ok(t!("twitch.not_streaming", locale = &self.lang));
         }
 
-        let msg = "LiveU stream restarting".to_string();
+        let msg = t!("twitch.stream_restarting", locale = &self.lang);
         let _ = self.client.say(channel.to_owned(), msg).await;
 
         self.generate_liveu_stop_message(channel.to_owned()).await?;
@@ -404,7 +446,7 @@ impl Twitch {
     async fn generate_liveu_reboot_message(&self, channel: String) -> Result<String, Error> {
         let is_streaming = self.liveu.is_streaming(&self.liveu_boss_id).await;
 
-        let msg = "LiveU Rebooting, please wait approximately 2-3 minutes".to_string();
+        let msg = t!("twitch.rebooting_message", locale = &self.lang);
         let _ = self.client.say(channel.to_owned(), msg).await;
 
         if is_streaming {
@@ -424,7 +466,7 @@ impl Twitch {
         }
 
         if attempts == max_attempts {
-            return Ok("LiveU took too long to reboot".to_string());
+            return Ok(t!("twitch.reboot_too_long", locale = &self.lang));
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -435,7 +477,7 @@ impl Twitch {
             return Ok(String::new());
         }
 
-        Ok("LiveU rebooted successfully".to_string())
+        Ok(t!("twitch.reboot_success", locale = &self.lang))
     }
 
     async fn toggle_delay(&self, channel: String) -> Result<String, Error> {
@@ -448,9 +490,9 @@ impl Twitch {
 
         let current_delay = self.liveu.get_delay(&self.liveu_boss_id).await?;
         let delay = if current_delay.delay == 1000 {
-            (5000, "LiveU high resiliency mode")
+            (5000, t!("twitch.high_delay", locale = &self.lang))
         } else {
-            (1000, "LiveU low delay mode")
+            (1000, t!("twitch.low_delay", locale = &self.lang))
         };
 
         self.liveu.set_delay(&self.liveu_boss_id, delay.0).await?;
@@ -481,6 +523,7 @@ struct DataUsedInThread {
     chat: TwitchIRCClient<TCPTransport<TLS>, StaticLoginCredentials>,
     liveu: Liveu,
     boss_id: String,
+    lang: String,
     channel: String,
 }
 
@@ -509,16 +552,17 @@ impl DataUsedInThread {
         }
 
         if attempts == max_attempts {
-            let msg = format!(
-                "LiveU {} stream took too long might not have worked",
-                not_success
+            let msg = t!(
+                "twitch.action_too_long", 
+                locale = &self.lang, 
+                not_success_msg = &not_success
             );
             let _ = self.chat.say(self.channel.to_owned(), msg).await;
 
             return;
         }
 
-        let msg = format!("LiveU streaming {} successfully", success);
+        let msg = t!("twitch.action_successfully", locale = &self.lang, success_msg = &success);
         let _ = self.chat.say(self.channel.to_owned(), msg).await;
     }
 }

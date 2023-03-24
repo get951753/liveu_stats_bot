@@ -69,6 +69,7 @@ pub struct Config {
     pub rtmp: Option<Rtmp>,
     pub srt: Option<Srt>,
     pub server: bool,
+    pub lang: String,
     pub custom_port_names: Option<CustomUnitNames>,
 }
 
@@ -138,6 +139,13 @@ impl Config {
             .err("Please enter y or n: ")
             .default("y".to_string())
             .get());   
+        
+        let lang =  input()
+            .msg("English or Chinese message? (en/zh-tw): ")
+            .add_test(|x: &String| x.to_lowercase() == "en" || x.to_lowercase() == "zh-tw")
+            .err("Please enter en or zh-tw: ")
+            .default("en".to_string())
+            .get();
         
         let lauth = liveu::Liveu::authenticate(liveu.clone()).await?;
         let inventories = lauth.get_inventories().await?;
@@ -263,6 +271,7 @@ impl Config {
             rtmp,
             srt,
             server,
+            lang,
             custom_port_names: custom_unit_names,
         };
         fs::write(CONFIG_FILE_NAME, serde_json::to_string_pretty(&config)?)?;

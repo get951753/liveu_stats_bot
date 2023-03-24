@@ -1,18 +1,24 @@
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 use twitch_irc::{
     login,
     transport::tcp::{TCPTransport, TLS},
     TwitchIRCClient,
 };
 use serde::Serialize;
+use rust_i18n::t;
 
 use crate::{config, liveu};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Modem {
-    pub portname: String,
-    pub bitrate: u32,
+    pub port: String,
+    pub uplink_kbps: u32,
     pub connected: bool,
     pub enabled: bool,
+    pub technology: String,
+    pub is_currently_roaming: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +27,10 @@ pub struct Monitor {
     pub config: config::Config,
     pub liveu: liveu::Liveu,
     pub boss_id: String,
+    pub lang: String,
+    pub total_bitrate: Arc<Mutex<u32>>,
+    pub modem_sync: Arc<Mutex<Vec<Modem>>>,
+    pub battery_sync: Arc<Mutex<liveu::Battery>>,
 }
 
 impl Monitor {
@@ -49,29 +59,47 @@ impl Monitor {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
             if !self.liveu.is_streaming(&self.boss_id).await {
+                let mut modem_sync = self.modem_sync.lock().await;
+                let mut total_bitrate = self.total_bitrate.lock().await;
+                *total_bitrate = 0;
+                *modem_sync = Vec::new();
                 ignore = true;
                 continue;
             }
 
             let mut current = Vec::new();
             let mut new_modems = Vec::new();
-
-            for interface in self
-                .liveu
-                .get_unit_custom_names(&self.boss_id, self.config.custom_port_names.clone())
-                .await
-                .unwrap()
             {
-                // we got a new interface
-                if !current_modems.contains(&interface.port) {
-                    // println!("New modem {}", interface.port);
-                    new_modems.push(interface.port.to_owned());
-                    current_modems.push(interface.port.to_owned());
+                let interfaces = self
+                    .liveu
+                    .get_unit_custom_names(&self.boss_id, self.config.custom_port_names.clone())
+                    .await
+                    .unwrap();
+                let mut modem_sync = self.modem_sync.lock().await;
+                let mut total_bitrate = self.total_bitrate.lock().await;
+                *total_bitrate = 0;
+                *modem_sync = Vec::new();
+                
+                for interface in interfaces{  
+                    *total_bitrate += &interface.uplink_kbps;
+                    (*modem_sync).push(Modem{
+                        port: interface.port.to_string(), 
+                        connected: interface.connected, 
+                        uplink_kbps: interface.uplink_kbps, 
+                        enabled: interface.enabled,
+                        technology: interface.technology,
+                        is_currently_roaming: interface.is_currently_roaming,
+                    });
+                    // we got a new interface
+                    if !current_modems.contains(&interface.port) {
+                        // println!("New modem {}", interface.port);
+                        new_modems.push(interface.port.to_owned());
+                        current_modems.push(interface.port.to_owned());
+                    }
+
+                    current.push(interface.port);
                 }
-
-                current.push(interface.port);
             }
-
             // check diff between current and prev
             let mut removed_modems = Vec::new();
             for modem in current_modems.iter() {
@@ -86,7 +114,7 @@ impl Monitor {
                 current_modems.swap_remove(index);
             }
 
-            let message = Self::generate_modems_message(new_modems, removed_modems);
+            let message = Self::generate_modems_message(new_modems, removed_modems, self.lang.clone());
 
             if !ignore && !message.is_empty() {
                 let _ = self
@@ -104,45 +132,33 @@ impl Monitor {
         }
     }
 
-    pub async fn get_modems_data(&self) -> (Vec<Modem>, u32){
-        let mut modemsdata:Vec<Modem> = Vec::new();
-        let mut total_bitrate = 0;
-        
-        for interface in self
-            .liveu
-            .get_unit_custom_names(&self.boss_id, self.config.custom_port_names.clone())
-            .await
-            .unwrap()
-        {  
-            total_bitrate += &interface.uplink_kbps;
-            modemsdata.push(Modem{
-                portname: interface.port.to_string(), 
-                connected: interface.connected, 
-                bitrate: interface.uplink_kbps, 
-                enabled: interface.enabled
-            });
-        }
-        
-        (modemsdata.to_owned(), total_bitrate)
-    }
-
-    fn generate_modems_message(new_modems: Vec<String>, removed_modems: Vec<String>) -> String {
+    fn generate_modems_message(new_modems: Vec<String>, removed_modems: Vec<String>, lang: String) -> String {
         let mut message = String::new();
 
         if !new_modems.is_empty() {
-            let a = if new_modems.len() > 1 { "are" } else { "is" };
+            let a = if new_modems.len() > 1 { t!("monitor.are", locale = &lang) } else { t!("monitor.is", locale = &lang) };
 
-            message += &format!("{} {} now connected", new_modems.join(", "), a);
+            message += t!(
+                "monitor.new_modem", 
+                locale = &lang, 
+                newModems = &new_modems.join(", "), 
+                isORare = &a
+            ).as_str();
         }
 
         if !removed_modems.is_empty() {
             let a = if removed_modems.len() > 1 {
-                "have"
+                t!("monitor.have", locale = &lang)
             } else {
-                "has"
+                t!("monitor.has", locale = &lang)
             };
 
-            message += &format!("{} {} disconnected", removed_modems.join(", "), a);
+            message += t!(
+                "monitor.remove_modem", 
+                locale = &lang, 
+                removedModems = &removed_modems.join(", "), 
+                haveORhas = &a
+            ).as_str();
         }
 
         message
@@ -161,16 +177,36 @@ impl Monitor {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
             if !self.liveu.is_streaming(&self.boss_id).await {
+                let mut battery_sync = self.battery_sync.lock().await;
+                *battery_sync = liveu::Battery {
+                    connected: false,
+                    percentage: 255,
+                    run_time_to_empty: 0,
+                    discharging: false,
+                    charging: false,
+                };
                 continue;
             }
 
             let battery = if let Ok(battery) = self.liveu.get_battery(&self.boss_id).await {
+                let mut battery_sync = self.battery_sync.lock().await;
+                *battery_sync = battery.clone();
+
                 if prev.percentage == 255 {
                     prev = battery.clone();
                 }
 
                 battery
             } else {
+                let mut battery_sync = self.battery_sync.lock().await;
+                *battery_sync = liveu::Battery {
+                    connected: false,
+                    percentage: 255,
+                    run_time_to_empty: 0,
+                    discharging: false,
+                    charging: false,
+                };
+
                 continue;
             };
 
@@ -179,7 +215,7 @@ impl Monitor {
                     .client
                     .say(
                         self.config.twitch.channel.to_owned(),
-                        "LiveU: RIP PowerBank / Cable Disconnected".to_string(),
+                        t!("monitor.rip_power", locale = &self.lang),
                     )
                     .await;
             }
@@ -189,7 +225,7 @@ impl Monitor {
                     .client
                     .say(
                         self.config.twitch.channel.to_owned(),
-                        "LiveU: Now charging".to_string(),
+                        t!("monitor.now_charging", locale = &self.lang),
                     )
                     .await;
             }
@@ -203,7 +239,7 @@ impl Monitor {
                     .client
                     .say(
                         self.config.twitch.channel.to_owned(),
-                        "LiveU: Too hot to charge".to_string(),
+                        t!("monitor.too_hot", locale = &self.lang),
                     )
                     .await;
             }
@@ -218,7 +254,7 @@ impl Monitor {
                     .client
                     .say(
                         self.config.twitch.channel.to_owned(),
-                        "LiveU: Fully charged".to_string(),
+                        t!("monitor.fully_charged", locale = &self.lang),
                     )
                     .await;
             }
@@ -232,22 +268,6 @@ impl Monitor {
         }
     }
 
-    pub async fn get_battery_data(&self) -> liveu::Battery {
-        let battery = if let Ok(battery) = self.liveu.get_battery(&self.boss_id).await {
-            battery
-        }else{
-            liveu::Battery {
-                connected: false,
-                percentage: 255,
-                run_time_to_empty: 0,
-                discharging: false,
-                charging: false,
-            }
-        };
-        
-        battery   
-    }
-    
     pub async fn battery_percentage_message(
         &self,
         percentage: u8,
@@ -255,10 +275,13 @@ impl Monitor {
         prev: &liveu::Battery,
     ) {
         if current.percentage == percentage && prev.percentage > percentage {
-            let message = format!(
-                "LiveU: Internal battery is at {}% and is {} charging",
-                percentage,
-                if current.charging { "" } else { "not" }
+            let a = if current.charging { t!("monitor.charging", locale = &self.lang)} else { t!("monitor.not_charging", locale = &self.lang)};
+
+            let message = t!(
+                "monitor.battery_percentage", 
+                locale = &self.lang,
+                percent = &percentage.to_string(),
+                chargingORnot = &a
             );
 
             let _ = self

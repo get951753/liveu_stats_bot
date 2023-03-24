@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
 use serde::Deserialize;
 
 use crate::{config, error::Error};
@@ -34,4 +37,18 @@ pub async fn get_srt_bitrate(config: &config::Srt) -> Result<i64, Error> {
     let stream: Stat = serde_json::from_value(publisher.to_owned())?;
 
     Ok(stream.bitrate)
+}
+
+pub async fn srt_bitrate_monitor(config: &config::Srt, srt_bitrate_sync: Arc<Mutex<i64>>){
+    loop{
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        if let Ok(bitrate) = get_srt_bitrate(config).await{
+            let mut srt_bitrate = srt_bitrate_sync.lock().await;
+            *srt_bitrate = bitrate;
+        }else{
+            let mut srt_bitrate = srt_bitrate_sync.lock().await;
+            *srt_bitrate = 0; 
+        }
+    }
 }
