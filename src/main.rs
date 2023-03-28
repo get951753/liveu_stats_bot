@@ -35,16 +35,18 @@ async fn main() -> Result<()> {
 
     {
         let modem_sync = Arc::new(Mutex::new(Vec::new()));
-        let battery_sync = Arc::new(Mutex::new(Battery {
-            connected: false,
-            percentage: 255,
-            run_time_to_empty: 0,
-            discharging: false,
-            charging: false,
-        }));
+        let battery_sync = Arc::new(Mutex::new(
+            Battery {
+                connected: false,
+                percentage: 255,
+                run_time_to_empty: 0,
+                discharging: false,
+                charging: false,
+            }));
         let total_bitrate_sync: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
         let srt_bitrate_sync: Arc<Mutex<i64>> = Arc::new(Mutex::new(0));
         let srt_bitrate = Arc::clone(&srt_bitrate_sync);
+
         if let Some(srt) = config.srt.clone() {
             tokio::spawn(async move { srt::srt_bitrate_monitor(&srt, srt_bitrate.clone()).await });
         }
@@ -73,19 +75,23 @@ async fn main() -> Result<()> {
                 battery_sync: Arc::clone(&battery_sync),
             };
 
-            if config.liveu.monitor.modems {
-                println!("Liveu: monitoring modems");
+            if config.liveu.monitor.modems || config.server {
+                if config.liveu.monitor.modems{
+                    println!("Liveu: monitoring modems");
+                }
                 let modems = monitor.clone();
                 tokio::spawn(async move { modems.monitor_modems().await });
             }
 
-            if config.liveu.monitor.battery {
-                println!("Liveu: monitoring battery");
+            if config.liveu.monitor.battery || config.server {
+                if config.liveu.monitor.battery{
+                    println!("Liveu: monitoring battery");
+                }
                 let battery = monitor.clone();
                 tokio::spawn(async move { battery.monitor_battery().await });
             }
 
-            if config.server{
+            if config.server {
                 let port = 8183;        
                 let data = AppState{
                     monitor: monitor.clone(),

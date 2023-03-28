@@ -18,6 +18,7 @@ This config will be automatically generated upon running the binary and saved as
         "id": null,
         "monitor": {
             "battery": true,
+            "batteryCharging": true,
             "batteryNotification": [
                 99,
                 50,
@@ -25,7 +26,9 @@ This config will be automatically generated upon running the binary and saved as
                 5,
                 1
             ],
-            "modems": true
+            "batteryInterval": 10,
+            "modems": true,
+            "modemsInterval": 10
         }
     },
     "twitch": {
@@ -55,6 +58,7 @@ This config will be automatically generated upon running the binary and saved as
         "publisher": "publish/live/feed1"
     },
     "server": true,
+    "lang": "zh-tw",
     "customPortNames": {
         "ethernet": "ETH",
         "wifi": "WiFi",
@@ -82,7 +86,8 @@ You can disable this setting (replace `true` with `false`) If you don't want it.
 
 | Name            | Description                                                                         |
 | --------------- | ----------------------------------------------------------------------------------- |
-| server          | A server can respond modems status, battery status, and srt bitrate on port 8183    |
+| server          | A server can respond modems status, battery status, and srt bitrate on port 8183 <br> (You can display the status on OBS) |
+| batteryCharging | A battery charging notification (notify when charging status changes)            |
 
 ## Chat Commands
 

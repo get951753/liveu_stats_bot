@@ -869,7 +869,7 @@ checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "liveu_stats_bot"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "actix-cors",
  "actix-web",

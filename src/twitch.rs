@@ -240,7 +240,7 @@ impl Twitch {
         {
             interfaces = (self.modem_sync.lock().await).clone();
         }
-        if !self.config.liveu.monitor.modems{
+        if !self.config.liveu.monitor.modems && !self.config.server {
             for interface in self
                 .liveu
                 .get_unit_custom_names(&self.liveu_boss_id, self.config.custom_port_names.clone())
@@ -305,7 +305,7 @@ impl Twitch {
     }
 
     async fn generate_liveu_battery_message(&self) -> Result<String, Error> {
-        let battery = if self.config.liveu.monitor.modems{
+        let battery = if self.config.liveu.monitor.battery || self.config.server{
             (self.battery_sync.lock().await).clone()
         }else{
             match self.liveu.get_battery(&self.liveu_boss_id).await {

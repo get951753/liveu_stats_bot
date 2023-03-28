@@ -56,7 +56,10 @@ impl Monitor {
         }
 
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                self.config.liveu.monitor.modems_interval,
+            ))
+            .await;
 
             if !self.liveu.is_streaming(&self.boss_id).await {
                 let mut modem_sync = self.modem_sync.lock().await;
@@ -100,30 +103,33 @@ impl Monitor {
                     current.push(interface.port);
                 }
             }
-            // check diff between current and prev
-            let mut removed_modems = Vec::new();
-            for modem in current_modems.iter() {
-                if !current.contains(modem) {
-                    // println!("Removed modem {}", modem);
-                    removed_modems.push(modem.to_owned());
+
+            if self.config.liveu.monitor.modems{
+                // check diff between current and prev
+                let mut removed_modems = Vec::new();
+                for modem in current_modems.iter() {
+                    if !current.contains(modem) {
+                        // println!("Removed modem {}", modem);
+                        removed_modems.push(modem.to_owned());
+                    }
                 }
-            }
 
-            for rem in removed_modems.iter() {
-                let index = current_modems.iter().position(|m| m == rem).unwrap();
-                current_modems.swap_remove(index);
-            }
+                for rem in removed_modems.iter() {
+                    let index = current_modems.iter().position(|m| m == rem).unwrap();
+                    current_modems.swap_remove(index);
+                }
 
-            let message = Self::generate_modems_message(new_modems, removed_modems, self.lang.clone());
+                let message = Self::generate_modems_message(new_modems, removed_modems, self.lang.clone());
 
-            if !ignore && !message.is_empty() {
-                let _ = self
-                    .client
-                    .say(
-                        self.config.twitch.channel.to_owned(),
-                        "LiveU: ".to_string() + &message,
-                    )
-                    .await;
+                if !ignore && !message.is_empty() {
+                    let _ = self
+                        .client
+                        .say(
+                            self.config.twitch.channel.to_owned(),
+                            "LiveU: ".to_string() + &message,
+                        )
+                        .await;
+                }
             }
 
             if ignore {
@@ -174,7 +180,10 @@ impl Monitor {
         };
 
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                self.config.liveu.monitor.battery_interval,
+            ))
+            .await;
 
             if !self.liveu.is_streaming(&self.boss_id).await {
                 let mut battery_sync = self.battery_sync.lock().await;
@@ -210,61 +219,69 @@ impl Monitor {
                 continue;
             };
 
-            if !battery.charging && battery.discharging && !prev.discharging {
-                let _ = self
-                    .client
-                    .say(
-                        self.config.twitch.channel.to_owned(),
-                        t!("monitor.rip_power", locale = &self.lang),
-                    )
-                    .await;
-            }
-
-            if battery.charging && !battery.discharging && !prev.charging {
-                let _ = self
-                    .client
-                    .say(
-                        self.config.twitch.channel.to_owned(),
-                        t!("monitor.now_charging", locale = &self.lang),
-                    )
-                    .await;
-            }
-
-            if battery.percentage < 100
-                && !battery.charging
-                && !battery.discharging
-                && (prev.charging || prev.discharging)
-            {
-                let _ = self
-                    .client
-                    .say(
-                        self.config.twitch.channel.to_owned(),
-                        t!("monitor.too_hot", locale = &self.lang),
-                    )
-                    .await;
-            }
-
-            if battery.percentage == 100
-                && !battery.charging
-                && !battery.discharging
-                && prev.charging
-                && !prev.discharging
-            {
-                let _ = self
-                    .client
-                    .say(
-                        self.config.twitch.channel.to_owned(),
-                        t!("monitor.fully_charged", locale = &self.lang),
-                    )
-                    .await;
-            }
-
-            for percentage in &self.config.liveu.monitor.battery_notification {
-                self.battery_percentage_message(*percentage, &battery, &prev)
-                    .await;
+            if self.config.liveu.monitor.battery{
+                if self.config.liveu.monitor.battery_charging {
+                    self.battery_charging(&battery, &prev).await;
+                }
+    
+                for percentage in &self.config.liveu.monitor.battery_notification {
+                    self.battery_percentage_message(*percentage, &battery, &prev)
+                        .await;
+                }
             }
 
             prev = battery;
+        }
+    }
+
+    pub async fn battery_charging(&self, battery: &liveu::Battery, prev: &liveu::Battery) {
+        if !battery.charging && battery.discharging && !prev.discharging {
+            let _ = self
+                .client
+                .say(
+                    self.config.twitch.channel.to_owned(),
+                    t!("monitor.rip_power", locale = &self.lang),
+                )
+                .await;
+        }
+
+        if battery.charging && !battery.discharging && !prev.charging {
+            let _ = self
+                .client
+                .say(
+                    self.config.twitch.channel.to_owned(),
+                    t!("monitor.now_charging", locale = &self.lang),
+                )
+                .await;
+        }
+
+        if battery.percentage < 100
+            && !battery.charging
+            && !battery.discharging
+            && (prev.charging || prev.discharging)
+        {
+            let _ = self
+                .client
+                .say(
+                    self.config.twitch.channel.to_owned(),
+                    t!("monitor.too_hot", locale = &self.lang),
+                )
+                .await;
+        }
+
+        if battery.percentage == 100
+            && !battery.charging
+            && !battery.discharging
+            && prev.charging
+            && !prev.discharging
+        {
+            let _ = self
+                .client
+                .say(
+                    self.config.twitch.channel.to_owned(),
+                    t!("monitor.fully_charged", locale = &self.lang),
+                )
+                .await;
         }
     }
 
